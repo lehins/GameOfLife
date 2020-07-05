@@ -4,8 +4,7 @@
 
 module GameOfLife.Board where
 
-import Data.IORef
-import Data.Int
+import Control.Monad
 import Data.Massiv.Array as A
 import Data.Massiv.Array.Unsafe as A
 import Data.Word
@@ -25,7 +24,6 @@ data LifeBoard =
   , visibleSize    :: !Sz2
   , fullBoard      :: !FullBoard
   , lifePaused     :: !Bool
-  , lifeBoardDirty :: !(IORef Bool)
   }
 
 
@@ -34,12 +32,14 @@ lifeRules 0 3 = 1
 lifeRules 1 2 = 1
 lifeRules 1 3 = 1
 lifeRules _ _ = 0
+{-# INLINE lifeRules #-}
 
 lifeStencil :: Stencil Ix2 Word8 Word8
 lifeStencil = makeStencil (Sz (3 :. 3)) (1 :. 1) $ \ f ->
   lifeRules <$> f (0 :. 0) <*> (f (-1 :. -1) + f (-1 :. 0) + f (-1 :. 1) +
                                 f ( 0 :. -1) +               f ( 0 :. 1) +
                                 f ( 1 :. -1) + f ( 1 :. 0) + f ( 1 :. 1))
+{-# INLINE lifeStencil #-}
 
 lifeStep :: MonadIO m => FullBoard -> m FullBoard
 lifeStep FullBoard {..} =
@@ -55,6 +55,7 @@ lifeStep FullBoard {..} =
 
 lifeStepM :: MonadIO m => MArray RW S Ix2 Word8 -> Array S Ix2 Word8 -> m ()
 lifeStepM marr = computeInto marr . mapStencil Wrap lifeStencil
+{-# INLINE lifeStep #-}
 
 initLife :: MonadIO m => Sz2 -> Array S Ix2 Word8 -> m FullBoard
 initLife sz arr =
@@ -71,15 +72,13 @@ initLife sz arr =
     pure FullBoard {..}
 
 
-initLifeBoard :: MonadIO m => FullBoard -> Ix2 -> Sz2 -> m LifeBoard
-initLifeBoard board boardStart boardSize = liftIO $ do
-  lifeBoardDirty <- newIORef True
-  pure LifeBoard
+initLifeBoard :: FullBoard -> Ix2 -> Sz2 -> LifeBoard
+initLifeBoard board boardStart boardSize =
+  LifeBoard
     { visibleStart = boardStart
     , visibleSize = boardSize
     , fullBoard = board
     , lifePaused = False
-    , lifeBoardDirty = lifeBoardDirty
     }
 
 lifeBoardStep :: MonadIO m => LifeBoard -> m LifeBoard
@@ -88,31 +87,20 @@ lifeBoardStep lifeBoard@LifeBoard {fullBoard, lifePaused}
   | otherwise = do
     nextBoard <- lifeStep fullBoard
     pure lifeBoard {fullBoard = nextBoard}
+{-# INLINE lifeBoardStep #-}
 
 getBoardSize :: Monad m => LifeBoard -> m (Sz Ix2)
 getBoardSize LifeBoard {..} = do
   pure $ msize $ lifeCurrent fullBoard
+{-# INLINE getBoardSize #-}
 
-extractVisibleChange :: MonadIO m => LifeBoard -> m (Array S Ix2 Int8)
-extractVisibleChange LifeBoard {..} =
+
+mapAlive :: MonadIO m => (Ix2 -> a) -> LifeBoard -> m [a]
+mapAlive f LifeBoard {..} =
   liftIO $ do
-    isDirty <- atomicModifyIORef' lifeBoardDirty (\e -> (True, e))
-    if isDirty
-      then do
-        cur <- unsafeFreeze Par (lifeCurrent fullBoard)
-        curVisible <- extractM visibleStart visibleSize cur
-        computeIO $ A.map getDirtyChange curVisible
-      else do
-        prev <- unsafeFreeze Par (lifePrevious fullBoard)
-        cur <- unsafeFreeze Par (lifeCurrent fullBoard)
-        prevVisible <- extractM visibleStart visibleSize prev
-        curVisible <- extractM visibleStart visibleSize cur
-        computeIO $ A.zipWith getChange prevVisible curVisible
-  where
-    getDirtyChange c
-      | c == 0 = -1
-      | otherwise = 1
-    getChange p c
-      | p == c = 0
-      | p > c = -1
-      | otherwise = 1
+    cur <- unsafeFreeze Par (lifeCurrent fullBoard)
+    curVisible <- extractM visibleStart visibleSize cur
+    pure $!
+      A.stoList $!
+      simapMaybe (\ix e -> guard (e == 1) >> pure (f ix)) curVisible
+{-# INLINE mapAlive #-}

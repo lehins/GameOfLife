@@ -4,17 +4,11 @@
 {-# LANGUAGE TypeFamilies #-}
 module Main where
 
-import Data.IORef
-import Control.Monad
-import Data.Massiv.Array as A hiding (glossSize)
-import Data.Massiv.Array.Unsafe as A
+import Data.Massiv.Array as A
 import Data.Word
 import GameOfLife.Board
 import Graphics.Gloss
-import Graphics.Gloss.Data.Picture
 import Graphics.Gloss.Interface.IO.Game
-import System.Exit (ExitCode(..), exitSuccess, exitWith)
-import Text.Read (readMaybe)
 
 blinker :: Array S Ix2 Word8
 blinker = [ [0, 1, 0]
@@ -36,10 +30,10 @@ inf2 = [ [1, 1, 1, 0, 1]
 
 data Gloss =
   Gloss
-  { cellSize     :: !Int
-  , glossBoard   :: !LifeBoard
-  , glossSize    :: !(Int, Int)
-  , glossCounter :: !Int
+  { glossCellSize :: !Int
+  , glossBoard    :: !LifeBoard
+  , glossSize     :: !(Int, Int)
+  , glossCounter  :: !Int
   }
 
 aliveColor, deadColor :: Color
@@ -48,70 +42,61 @@ deadColor = makeColor 1 1 1 1
 
 runGameOfLife :: IO ()
 runGameOfLife = do
-  lifeBoard <- initLife (Sz2 120 160) glider
-  initBoard <- initLifeBoard lifeBoard 0 (Sz2 120 160)
-  let initGloss =
+  lifeBoard <- initLife (Sz2 480 640) glider
+  let initBoard = initLifeBoard lifeBoard 0 (sizeToVisible initCellSize initSize)
+      initGloss =
         Gloss
-          { cellSize = 4
+          { glossCellSize = initCellSize
           , glossBoard = initBoard
           , glossSize = initSize
           , glossCounter = itersUpdate
           }
   playIO disp bColor perSec initGloss lifeBoardToPicture onEvent boardStep
   where
-    itersUpdate = 5
+    initCellSize = 1
+    sizeToVisible cellSize (n, m) = Sz2 (m `div` cellSize) (n `div` cellSize)
+    itersUpdate = 1
     perSec = 150
     bColor = deadColor
     initSize = (640, 480)
     initPosition = (500, 200)
     disp = InWindow "Conway's Game of Life" initSize initPosition
     onEvent event gloss@Gloss {..} =
+      pure $
       case event of
-        EventResize newSize -> do
-          writeIORef (lifeBoardDirty glossBoard) True
-          pure gloss {glossSize = newSize}
-        _ -> pure gloss
+        EventResize newSize ->
+          let newVisibleSize = sizeToVisible glossCellSize newSize
+           in gloss
+                { glossSize = newSize
+                , glossBoard = glossBoard {visibleSize = newVisibleSize}
+                }
+        _ -> gloss
     boardStep _ gloss@Gloss {..}
       | glossCounter == 0 = do
         newBoard <- lifeBoardStep glossBoard
-        pure
-          gloss
-            { glossBoard = newBoard
-            , glossCounter = itersUpdate
-            }
+        pure gloss {glossBoard = newBoard, glossCounter = itersUpdate}
       | otherwise = pure gloss {glossCounter = glossCounter - 1}
 
 
 lifeBoardToPicture :: MonadIO m => Gloss -> m Picture
-lifeBoardToPicture Gloss{..} = do
-    visibleChange <- extractVisibleChange glossBoard
-    boardSize <- getBoardSize glossBoard
-    pure $
-      Pictures $
-      A.stoList $
-      simapMaybe
-        (toPolygons (liftIndex (`div` 2) (unSz boardSize)))
-        visibleChange
+lifeBoardToPicture Gloss {..} = do
+  boardSize <- getBoardSize glossBoard
+  Pictures <$>
+    mapAlive (toPolygons (liftIndex (`div` 2) (unSz boardSize))) glossBoard
   where
-    toPolygons halfSize ix e
-      | e == 0 = Nothing
-      | otherwise =
-        let cellColor
-              | e == 1 = aliveColor
-              | otherwise = deadColor
-         in case (ix - halfSize) * pureIndex cellSize of
-              (i :. j) ->
-                Just $
-                Color cellColor $
-                Polygon
-                  [ (fromIntegral x, fromIntegral y)
-                  | (x, y) <-
-                      [ (j, i)
-                      , (j + cellSize, i)
-                      , (j + cellSize, i + cellSize)
-                      , (j, i + cellSize)
-                      ]
-                  ]
+    toPolygons halfSize ix =
+      case (ix - halfSize) * pureIndex glossCellSize of
+        (i :. j) ->
+          Color aliveColor $
+          Polygon
+            [ (fromIntegral x, fromIntegral y)
+            | (x, y) <-
+                [ (j, i)
+                , (j + glossCellSize, i)
+                , (j + glossCellSize, i + glossCellSize)
+                , (j, i + glossCellSize)
+                ]
+            ]
 
 
 
