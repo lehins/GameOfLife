@@ -4,8 +4,8 @@
 {-# LANGUAGE TypeFamilies #-}
 module Main where
 
-import Control.Monad
 import Data.IORef
+import Control.Monad
 import Data.Massiv.Array as A hiding (glossSize)
 import Data.Massiv.Array.Unsafe as A
 import Data.Word
@@ -36,11 +36,10 @@ inf2 = [ [1, 1, 1, 0, 1]
 
 data Gloss =
   Gloss
-  { glossCellSize :: !Int
-  , glossBoard    :: !LifeBoard
-  , glossSize     :: !(Int, Int)
-  , glossCounter  :: !Int
-  , glossPicture  :: !Picture
+  { cellSize     :: !Int
+  , glossBoard   :: !LifeBoard
+  , glossSize    :: !(Int, Int)
+  , glossCounter :: !Int
   }
 
 aliveColor, deadColor :: Color
@@ -51,19 +50,16 @@ runGameOfLife :: IO ()
 runGameOfLife = do
   lifeBoard <- initLife (Sz2 120 160) glider
   initBoard <- initLifeBoard lifeBoard 0 (Sz2 120 160)
-  let cellSize = 4
-  initPicture <- lifeBoardToPicture cellSize initBoard
   let initGloss =
         Gloss
-          { glossCellSize = cellSize
+          { cellSize = 4
           , glossBoard = initBoard
           , glossSize = initSize
           , glossCounter = itersUpdate
-          , glossPicture = initPicture
           }
-  playIO disp bColor perSec initGloss (pure . glossPicture) onEvent boardStep
+  playIO disp bColor perSec initGloss lifeBoardToPicture onEvent boardStep
   where
-    itersUpdate = 10
+    itersUpdate = 5
     perSec = 150
     bColor = deadColor
     initSize = (640, 480)
@@ -78,24 +74,24 @@ runGameOfLife = do
     boardStep _ gloss@Gloss {..}
       | glossCounter == 0 = do
         newBoard <- lifeBoardStep glossBoard
-        picture <- lifeBoardToPicture glossCellSize newBoard
         pure
           gloss
             { glossBoard = newBoard
             , glossCounter = itersUpdate
-            , glossPicture = picture
             }
       | otherwise = pure gloss {glossCounter = glossCounter - 1}
 
 
-lifeBoardToPicture :: MonadIO m => Int -> LifeBoard -> m Picture
-lifeBoardToPicture cellSize lifeBoard = do
-  visibleChange <- extractVisibleChange lifeBoard
-  boardSize <- getBoardSize lifeBoard
-  pure $
-    Pictures $
-    A.stoList $
-    simapMaybe (toPolygons (liftIndex (`div` 2) (unSz boardSize))) visibleChange
+lifeBoardToPicture :: MonadIO m => Gloss -> m Picture
+lifeBoardToPicture Gloss{..} = do
+    visibleChange <- extractVisibleChange glossBoard
+    boardSize <- getBoardSize glossBoard
+    pure $
+      Pictures $
+      A.stoList $
+      simapMaybe
+        (toPolygons (liftIndex (`div` 2) (unSz boardSize)))
+        visibleChange
   where
     toPolygons halfSize ix e
       | e == 0 = Nothing
